@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Scene Q&A</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 1rem;
+        }
+        .container {
+            max-width: 700px;
+            width: 100%;
+            background: #fff;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+        }
+        h1 {
+            color: #0d2c4e;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        video {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            background-color: #000;
+        }
+        .controls {
+            margin-top: 1rem;
+            display: flex;
+            gap: 1rem;
+        }
+        #question {
+            flex-grow: 1;
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        #ask-btn {
+            padding: 0.75rem 1.5rem;
+            background-color: #1877f2;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-weight: 500;
+        }
+        #ask-btn:disabled {
+            background-color: #9dbef5;
+            cursor: not-allowed;
+        }
+        #ask-btn:hover:not(:disabled) {
+            background-color: #166fe5;
+        }
+        #answer-box {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background-color: #e7f3ff;
+            border-left: 4px solid #1877f2;
+            border-radius: 4px;
+            min-height: 40px;
+        }
+        #answer {
+            font-size: 1.1rem;
+            color: #0d2c4e;
+            white-space: pre-wrap; /* Preserve line breaks */
+        }
+        .status {
+            text-align: center;
+            margin-top: 1rem;
+            color: #606770;
+        }
+    </style>
+    <!-- Include the Socket.IO client library from a CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Live Scene Q&A</h1>
+        <video id="webcam" autoplay playsinline muted></video>
+        <!-- A hidden canvas is used to capture frames from the video stream -->
+        <canvas id="canvas" style="display:none;"></canvas>
+
+        <div class="controls">
+            <input type="text" id="question" placeholder="Ask about the scene...">
+            <button id="ask-btn">Ask</button>
+        </div>
+
+        <div id="answer-box">
+            <p id="answer"><i>The model's answer will appear here...</i></p>
+        </div>
+        <p class="status" id="status">Connecting to server...</p>
+    </div>
+
+    <script>
+        // --- DOM Element References ---
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        const questionInput = document.getElementById('question');
+        const askBtn = document.getElementById('ask-btn');
+        const answerEl = document.getElementById('answer');
+        const statusEl = document.getElementById('status');
+
+        // --- WebSocket Connection Setup ---
+        const socket = io.connect(window.location.origin);
+
+        socket.on('connect', () => {
+            console.log('Successfully connected to the server!');
+            statusEl.textContent = '✅ Connected';
+        });
+
+        socket.on('disconnect', () => {
+            statusEl.textContent = '❌ Disconnected';
+        });
+
+        // --- Webcam Initialization ---
+        async function setupWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                video.srcObject = stream;
+                video.addEventListener('loadedmetadata', () => {
+                    // Set the canvas dimensions to match the video feed
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                });
+            } catch (err) {
+                console.error("Error accessing webcam: ", err);
+                statusEl.textContent = "Error: Could not access webcam. Please grant permission and refresh.";
+            }
+        }
+
+        // --- Main Interaction Logic ---
+        function handleAskButtonClick() {
+            const question = questionInput.value.trim();
+            if (!question) {
+                alert('Please enter a question first.');
+                return;
+            }
+
+            // 1. Capture the current frame from the video
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // 2. Convert the canvas frame to a Base64 encoded JPEG image
+            const imageDataURL = canvas.toDataURL('image/jpeg', 0.8); // 80% quality
+
+            // 3. Update UI to show a loading state
+            askBtn.disabled = true;
+            askBtn.textContent = 'Thinking...';
+            answerEl.innerHTML = '<i>Processing your question...</i>';
+
+            // 4. Send the question and image to the server via WebSocket
+            console.log('Sending query to the server...');
+            socket.emit('query', {
+                question: question,
+                image: imageDataURL
+            });
+        }
+
+        // --- Event Listeners ---
+        askBtn.addEventListener('click', handleAskButtonClick);
+        // Allow submitting by pressing Enter in the input field
+        questionInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                handleAskButtonClick();
+            }
+        });
+
+        // Listen for the 'response' event from the server
+        socket.on('response', (data) => {
+            console.log('Received response:', data.answer);
+            answerEl.textContent = data.answer;
+
+            // Restore the UI to its active state
+            askBtn.disabled = false;
+            askBtn.textContent = 'Ask';
+            questionInput.value = ''; // Clear the input for the next question
+        });
+
+        // --- Initialize the application ---
+        setupWebcam();
+    </script>
+</body>
+</html>
